@@ -1,113 +1,139 @@
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
-const db = new sqlite3.Database("moviesData.db");
+const { open } = require("sqlite");
+const sqlite3 = require("sqlite3");
+const path = require("path");
+
+const databasePath = path.join(__dirname, "moviesData.db");
+
 const app = express();
 
-app.use(express.json()); // for parsing application/json
-app.use(express.urlencoded({ extended: true })); // for parsing application/x-www-form-urlencoded
+app.use(express.json());
 
-// API 1: Returns a list of all movie names in the movie table
-app.get("/movies/", (req, res) => {
-  db.all("SELECT movie_name FROM movie", (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: "Error fetching movie names" });
-      return;
-    }
-    res.json(rows.map((row) => ({ movieName: row.movie_name })));
-  });
-});
+let database = null;
 
-// API 2: Creates a new movie in the movie table
-app.post("/movies/", (req, res) => {
-  const { directorId, movieName, leadActor } = req.body;
-  db.run(
-    "INSERT INTO movie (director_id, movie_name, lead_actor) VALUES (?, ?, ?)",
-    [directorId, movieName, leadActor],
-    function (err) {
-      if (err) {
-        res.status(500).json({ error: "Error creating movie" });
-        return;
-      }
-      res.send("Movie Successfully Added");
-    }
+const initializeDbAndServer = async () => {
+  try {
+    database = await open({
+      filename: databasePath,
+      driver: sqlite3.Database,
+    });
+    app.listen(3000, () =>
+      console.log("Server Running at http://localhost:3000/")
+    );
+  } catch (error) {
+    console.log(`DB Error: ${error.message}`);
+    process.exit(1);
+  }
+};
+
+initializeDbAndServer();
+
+const convertMovieDbObjectToResponseObject = (dbObject) => {
+  return {
+    movieId: dbObject.movie_id,
+    directorId: dbObject.director_id,
+    movieName: dbObject.movie_name,
+    leadActor: dbObject.lead_actor,
+  };
+};
+
+const convertDirectorDbObjectToResponseObject = (dbObject) => {
+  return {
+    directorId: dbObject.director_id,
+    directorName: dbObject.director_name,
+  };
+};
+
+app.get("/movies/", async (request, response) => {
+  const getMoviesQuery = `
+    SELECT
+      movie_name
+    FROM
+      movie;`;
+  const moviesArray = await database.all(getMoviesQuery);
+  response.send(
+    moviesArray.map((eachMovie) => ({ movieName: eachMovie.movie_name }))
   );
 });
 
-// API 3: Returns a movie based on the movie ID
-app.get("/movies/:movieId/", (req, res) => {
-  const movieId = req.params.movieId;
-  db.get("SELECT * FROM movie WHERE movie_id = ?", [movieId], (err, row) => {
-    if (err) {
-      res.status(500).json({ error: "Error fetching movie details" });
-      return;
-    }
-    if (!row) {
-      res.status(404).json({ error: "Movie not found" });
-      return;
-    }
-    res.json(row);
-  });
+app.get("/movies/:movieId/", async (request, response) => {
+  const { movieId } = request.params;
+  const getMovieQuery = `
+    SELECT 
+      *
+    FROM 
+      movie 
+    WHERE 
+      movie_id = ${movieId};`;
+  const movie = await database.get(getMovieQuery);
+  response.send(convertMovieDbObjectToResponseObject(movie));
 });
 
-// API 4: Updates the details of a movie in the movie table based on the movie ID
-app.put("/movies/:movieId/", (req, res) => {
-  const movieId = req.params.movieId;
-  const { directorId, movieName, leadActor } = req.body;
-  db.run(
-    "UPDATE movie SET director_id = ?, movie_name = ?, lead_actor = ? WHERE movie_id = ?",
-    [directorId, movieName, leadActor, movieId],
-    function (err) {
-      if (err) {
-        res.status(500).json({ error: "Error updating movie details" });
-        return;
-      }
-      res.send("Movie Details Updated");
-    }
+app.post("/movies/", async (request, response) => {
+  const { directorId, movieName, leadActor } = request.body;
+  const postMovieQuery = `
+  INSERT INTO
+    movie ( director_id, movie_name, lead_actor)
+  VALUES
+    (${directorId}, '${movieName}', '${leadActor}');`;
+  await database.run(postMovieQuery);
+  response.send("Movie Successfully Added");
+});
+
+app.put("/movies/:movieId/", async (request, response) => {
+  const { directorId, movieName, leadActor } = request.body;
+  const { movieId } = request.params;
+  const updateMovieQuery = `
+            UPDATE
+              movie
+            SET
+              director_id = ${directorId},
+              movie_name = '${movieName}',
+              lead_actor = '${leadActor}'
+            WHERE
+              movie_id = ${movieId};`;
+
+  await database.run(updateMovieQuery);
+  response.send("Movie Details Updated");
+});
+
+app.delete("/movies/:movieId/", async (request, response) => {
+  const { movieId } = request.params;
+  const deleteMovieQuery = `
+  DELETE FROM
+    movie
+  WHERE
+    movie_id = ${movieId};`;
+  await database.run(deleteMovieQuery);
+  response.send("Movie Removed");
+});
+
+app.get("/directors/", async (request, response) => {
+  const getDirectorsQuery = `
+    SELECT
+      *
+    FROM
+      director;`;
+  const directorsArray = await database.all(getDirectorsQuery);
+  response.send(
+    directorsArray.map((eachDirector) =>
+      convertDirectorDbObjectToResponseObject(eachDirector)
+    )
   );
 });
 
-// API 5: Deletes a movie from the movie table based on the movie ID
-app.delete("/movies/:movieId/", (req, res) => {
-  const movieId = req.params.movieId;
-  db.run("DELETE FROM movie WHERE movie_id = ?", [movieId], function (err) {
-    if (err) {
-      res.status(500).json({ error: "Error deleting movie" });
-      return;
-    }
-    res.send("Movie Removed");
-  });
-});
-
-// API 6: Returns a list of all directors in the director table
-app.get("/directors/", (req, res) => {
-  db.all("SELECT * FROM director", (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: "Error fetching directors" });
-      return;
-    }
-    res.json(rows);
-  });
-});
-
-// API 7: Returns a list of all movie names directed by a specific director
-app.get("/directors/:directorId/movies/", (req, res) => {
-  const directorId = req.params.directorId;
-  db.all(
-    "SELECT movie_name FROM movie WHERE director_id = ?",
-    [directorId],
-    (err, rows) => {
-      if (err) {
-        res.status(500).json({ error: "Error fetching movie names" });
-        return;
-      }
-      res.json(rows.map((row) => ({ movieName: row.movie_name })));
-    }
+app.get("/directors/:directorId/movies/", async (request, response) => {
+  const { directorId } = request.params;
+  const getDirectorMoviesQuery = `
+    SELECT
+      movie_name
+    FROM
+      movie
+    WHERE
+      director_id='${directorId}';`;
+  const moviesArray = await database.all(getDirectorMoviesQuery);
+  response.send(
+    moviesArray.map((eachMovie) => ({ movieName: eachMovie.movie_name }))
   );
 });
-
-// Start the server
-app.listen(3000, () => {
-  console.log("Server running on http://localhost:3000");
-});
-
 module.exports = app;
